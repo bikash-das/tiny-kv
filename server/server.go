@@ -70,10 +70,6 @@ func handleClient(conn net.Conn) {
 			break
 		}
 	}
-
-	conn.Close()
-	ct := activeClients.Decrement()
-	log.Printf("Client disconnected. Total active: %d", ct)
 }
 
 func RunTCPServer(host string, port int) {
