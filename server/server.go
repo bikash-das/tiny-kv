@@ -5,7 +5,30 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync"
 )
+
+// private
+type stat struct {
+	sync.Mutex
+	count int
+}
+
+func (s *stat) Increment() int {
+	s.Lock()
+	defer s.Unlock()
+	s.count++
+	return s.count
+}
+func (s *stat) Decrement() int {
+	s.Lock()
+	defer s.Unlock()
+	s.count--
+	return s.count
+}
+
+// global
+var activeClients stat
 
 func readCommand(c net.Conn) (string, error) {
 	var buf []byte = make([]byte, 512)
@@ -22,10 +45,40 @@ func respond(cmd string, c net.Conn) error {
 	}
 	return nil
 }
+func handleClient(conn net.Conn) {
+	// deferred block: Even if something goes wrong, the counter will
+	// be updated properly and connection will be closed
+	defer func() {
+		conn.Close()
+		ct := activeClients.Decrement()
+		log.Printf("Client disconnected. Total active: %d", ct)
+	}()
+	// This loop allows the client to send multiple commands in one session
+	for {
+		cmd, err := readCommand(conn)
+		if err != nil {
+			if err != io.EOF {
+				// epoll notification: client hung up
+				log.Println("Read error:", err)
+			}
+			break // Exit the inner loop to handle disconnect
+		}
 
-func RunSyncTCPServer(host string, port int) {
+		log.Printf("Received: %q", cmd)
+		if err = respond(cmd, conn); err != nil {
+			log.Println("Write error:", err)
+			break
+		}
+	}
+
+	conn.Close()
+	ct := activeClients.Decrement()
+	log.Printf("Client disconnected. Total active: %d", ct)
+}
+
+func RunTCPServer(host string, port int) {
 	addr := host + ":" + strconv.Itoa(port)
-	log.Println("Starting synchronous TCP server on", addr)
+	log.Println("Starting Async TCP server on", addr)
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -33,36 +86,15 @@ func RunSyncTCPServer(host string, port int) {
 	}
 	defer listener.Close()
 
-	clients := 0
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println("Accept error:", err)
 			continue
 		}
-
-		clients++
-		log.Printf("Client connected [%s]. Total active: %d", conn.RemoteAddr(), clients)
-
-		// This loop allows the client to send multiple commands in one session
-		for {
-			cmd, err := readCommand(conn)
-			if err != nil {
-				if err != io.EOF {
-					log.Println("Read error:", err)
-				}
-				break // Exit the inner loop to handle disconnect
-			}
-
-			log.Printf("Received: %q", cmd)
-			if err = respond(cmd, conn); err != nil {
-				log.Println("Write error:", err)
-				break
-			}
-		}
-
-		conn.Close()
-		clients--
-		log.Printf("Client disconnected. Total active: %d", clients)
+		newCount := activeClients.Increment()
+		log.Printf("Client connected [%s]. Total active: %d", conn.RemoteAddr(), newCount)
+		go handleClient(conn)
 	}
+
 }
