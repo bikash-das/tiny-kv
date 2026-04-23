@@ -55,6 +55,14 @@ func handleClient(conn net.Conn) {
 	}()
 	// This loop allows the client to send multiple commands in one session
 	for {
+		// Accept blocks waitin for new connections.
+		// For each conn, we start a new goroutine to handle it.
+		//
+		// Blocking calls (Accept/Read) only block the current goroutine,
+		// not the entire program. Multiple clients can be handled concurrently.
+		//
+		// The Go runtime manages goroutines efficiently and resumes them
+		// when I/O is ready
 		cmd, err := readCommand(conn)
 		if err != nil {
 			if err != io.EOF {
@@ -81,8 +89,10 @@ func RunTCPServer(host string, port int) {
 		log.Fatal("Failed to bind to port:", err)
 	}
 	defer listener.Close()
-
+	// Only blocks main goroutine
 	for {
+		// blocks waiting for new connection.
+		// for each conn, spins up new goroutine
 		conn, err := listener.Accept()
 		if err != nil {
 			log.Println("Accept error:", err)
@@ -90,7 +100,8 @@ func RunTCPServer(host string, port int) {
 		}
 		newCount := activeClients.Increment()
 		log.Printf("Client connected [%s]. Total active: %d", conn.RemoteAddr(), newCount)
-		go handleClient(conn)
+		go handleClient(conn) // Every conn, spins up new goroutine and then main goroutine again waits
+
 	}
 
 }
